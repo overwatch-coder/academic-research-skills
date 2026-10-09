@@ -356,6 +356,58 @@ class TP2P3CacheBehavior(_PipelineTestBase):
         )
 
 
+class JudgeExecutionIdentity(_PipelineTestBase):
+    """A preferred model must never become invented provenance or a cache hit."""
+
+    def test_changed_judge_identity_partitions_cache_and_emission(self) -> None:
+        cache: dict[str, Any] = {}
+        invocations: list[str] = []
+
+        def judge_fn(**kwargs: Any) -> dict[str, Any]:
+            invocations.append(kwargs["judge_model"])
+            return {"judgment": "SUPPORTED", "rationale": "identity-bound judge"}
+
+        for identity in ("gpt-6-astra-xhigh", "claude-fable-5-1-high", "gpt-6-astra-xhigh"):
+            out = self.run_pipeline(
+                citations=[_citation()], config=_config(judge_model=identity),
+                judge_fn=judge_fn, cache=cache,
+            )
+            self.assertEqual(out["claim_audit_results"][0]["judge_model"], identity)
+        self.assertEqual(invocations, ["gpt-6-astra-xhigh", "claude-fable-5-1-high"])
+        self.assertEqual(len(cache), 2)
+
+    def test_missing_or_unknown_identity_never_hits_a_prior_run(self) -> None:
+        # Same fail-closed shape as the unknown prompt_version (#361): the key is
+        # bound to audit_run_id, so a second run with the same shared cache must
+        # re-invoke the judge, while a repeated citation within one run dedups.
+        def judge_fn(**kwargs: Any) -> dict[str, Any]:
+            invocations.append(kwargs["judge_model"])
+            return {"judgment": "SUPPORTED", "rationale": "runtime identity unavailable"}
+
+        for config in ({}, {"judge_model": None}, {"judge_model": " "}, {"judge_model": "UNKNOWN"}):
+            with self.subTest(config=config):
+                invocations: list[str] = []
+                cache: dict[str, Any] = {}
+                for run_id in ("2026-09-06T00:00:00Z-aaaa", "2026-09-06T00:00:01Z-bbbb"):
+                    out = self.run_pipeline(
+                        citations=[_citation(), _citation()], config=config,
+                        judge_fn=judge_fn, cache=cache, audit_run_id=run_id,
+                    )
+                    self.assertTrue(all(row["judge_model"] == "unknown" for row in out["claim_audit_results"]))
+                    self.assertEqual(self._validate_passport(out), [])
+                # one judge call per run (the duplicate citation dedups within the run)
+                self.assertEqual(invocations, ["unknown", "unknown"])
+                self.assertEqual(len(cache), 2, "each run owns its own cache partition")
+
+    def test_invalid_identity_fails_before_retrieval_or_judge(self) -> None:
+        with self.assertRaisesRegex(ValueError, "judge_model must be a string identity or null"):
+            self.run_pipeline(
+                citations=[_citation()], config=_config(judge_model={"model": "gpt-6-astra"}),
+                retrieve_fn=lambda _: self.fail("invalid identity reached retrieval"),
+                judge_fn=lambda **_: self.fail("invalid identity reached judge"),
+            )
+
+
 # ---------------------------------------------------------------------------
 # #361 — prompt-version partitions the judge cache keyspace.
 # ---------------------------------------------------------------------------
@@ -2287,6 +2339,111 @@ class TP360NonStringJudgeRationale(_PipelineTestBase):
         self.assertTrue(e["rationale"], "null rationale must degrade to a non-empty default")
         self.assertEqual(sorted(_CV_VALIDATOR.iter_errors(e), key=str), [])
         self.assertEqual(self._validate_passport(out, [manifest]), [])
+
+
+
+# ---------------------------------------------------------------------------
+# T-512 — PDF read-integrity tag on manual_pdf page-anchor rows (#512).
+# ---------------------------------------------------------------------------
+
+
+class T512PdfReadIntegrityTag(_PipelineTestBase):
+    """#512: completed manual_pdf page-anchor rows are tagged when the preflight
+    sidecar is missing or non-PASS; cache hits cannot bypass; None = legacy."""
+
+    @staticmethod
+    def _manual_pdf(citation: dict[str, Any]) -> dict[str, Any]:
+        return {"ref_retrieval_method": "manual_pdf", "retrieved_excerpt": "uploaded excerpt"}
+
+    def _tag(self) -> str:
+        from scripts.claim_audit_pipeline import PDF_READ_INTEGRITY_TAG
+
+        return PDF_READ_INTEGRITY_TAG
+
+    def test_missing_sidecar_tags_rationale(self) -> None:
+        out = self.run_pipeline(
+            citations=[_citation()], retrieve_fn=self._manual_pdf, pdf_preflight_sidecars={}
+        )
+        self.assertIn(self._tag(), out["claim_audit_results"][0]["rationale"])
+
+    def test_pass_sidecar_not_tagged(self) -> None:
+        out = self.run_pipeline(
+            citations=[_citation()],
+            retrieve_fn=self._manual_pdf,
+            pdf_preflight_sidecars={"smith2024preprints": {"verdict": "PASS"}},
+        )
+        self.assertNotIn(self._tag(), out["claim_audit_results"][0]["rationale"])
+
+    def test_fail_and_unavailable_sidecars_tagged(self) -> None:
+        for verdict in ("FAIL", "UNAVAILABLE"):
+            with self.subTest(verdict=verdict):
+                out = self.run_pipeline(
+                    citations=[_citation()],
+                    retrieve_fn=self._manual_pdf,
+                    pdf_preflight_sidecars={"smith2024preprints": {"verdict": verdict}},
+                )
+                self.assertIn(self._tag(), out["claim_audit_results"][0]["rationale"])
+
+    def test_none_param_is_legacy_untagged(self) -> None:
+        out = self.run_pipeline(citations=[_citation()], retrieve_fn=self._manual_pdf)
+        self.assertNotIn(self._tag(), out["claim_audit_results"][0]["rationale"])
+
+    def test_api_rows_never_tagged(self) -> None:
+        out = self.run_pipeline(citations=[_citation()], pdf_preflight_sidecars={})
+        self.assertNotIn(self._tag(), out["claim_audit_results"][0]["rationale"])
+
+    def test_non_page_anchor_never_tagged(self) -> None:
+        out = self.run_pipeline(
+            citations=[_citation(anchor_kind="quote", anchor_value="verbatim%20text")],
+            retrieve_fn=self._manual_pdf,
+            pdf_preflight_sidecars={},
+        )
+        self.assertNotIn(self._tag(), out["claim_audit_results"][0]["rationale"])
+
+    def test_cache_hit_cannot_bypass_tag(self) -> None:
+        cache: dict[str, Any] = {}
+        first = self.run_pipeline(
+            citations=[_citation()],
+            retrieve_fn=self._manual_pdf,
+            cache=cache,
+            pdf_preflight_sidecars={},
+        )
+        self.assertEqual(len(cache), 1)
+        second = self.run_pipeline(
+            citations=[_citation()],
+            retrieve_fn=self._manual_pdf,
+            cache=cache,
+            pdf_preflight_sidecars={},
+        )
+        for out in (first, second):
+            self.assertIn(self._tag(), out["claim_audit_results"][0]["rationale"])
+        # Tag never contaminates the cached judge body (run-context only).
+        (cached,) = cache.values()
+        self.assertNotIn(self._tag(), str(cached))
+
+    def test_retrieve_fn_receives_preflight_verdict(self) -> None:
+        seen: list[Any] = []
+
+        def spy_retrieve(citation: dict[str, Any]) -> dict[str, Any]:
+            seen.append(citation.get("pdf_preflight_verdict"))
+            return {"ref_retrieval_method": "manual_pdf", "retrieved_excerpt": "x"}
+
+        self.run_pipeline(
+            citations=[_citation()],
+            retrieve_fn=spy_retrieve,
+            pdf_preflight_sidecars={"smith2024preprints": {"verdict": "FAIL"}},
+        )
+        self.run_pipeline(
+            citations=[_citation()], retrieve_fn=spy_retrieve, pdf_preflight_sidecars={}
+        )
+        self.run_pipeline(citations=[_citation()], retrieve_fn=spy_retrieve)
+        self.assertEqual(seen, ["FAIL", "MISSING", None])
+
+    def test_tagged_row_passes_consistency_lint(self) -> None:
+        out = self.run_pipeline(
+            citations=[_citation()], retrieve_fn=self._manual_pdf, pdf_preflight_sidecars={}
+        )
+        self.assertEqual(self._validate_passport(out), [])
 
 
 if __name__ == "__main__":

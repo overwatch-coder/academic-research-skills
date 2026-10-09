@@ -43,10 +43,18 @@ ARS modes fall on a spectrum between these poles. This table is the reference fo
 | academic-paper | `rebuttal-audit` | Fidelity | Heavy | Per-comment coverage checklist against an existing rebuttal draft, advisory QA |
 | academic-paper-reviewer | `full` | Balanced | Medium | Review rubric loaded, but reviewer perspectives are dynamic |
 | academic-paper-reviewer | `re-review` | Fidelity | Heavy | R&R traceability matrix, checklist-driven |
-| academic-paper-reviewer | `quick` | Fidelity | Heavy | Fixed EIC quick-assessment format |
+| academic-paper-reviewer | `quick` | Fidelity | Heavy | Fixed Journal-Fit Reviewer quick-assessment format |
 | academic-paper-reviewer | `methodology-focus` | Fidelity | Heavy | Focused on statistical/methods rubric |
 | academic-paper-reviewer | `guided` | Originality | Light | Socratic dialogue, adaptive to what the user needs |
-| academic-paper-reviewer | `calibration` (v3.2) | Fidelity | Heavy | Fixed 5x ensembling protocol, no creative adaptation |
+| academic-paper-reviewer | `calibration` (v3.2 + #611) | Fidelity | Heavy | Explicit 3×1 directional tier or default 5× ensemble (3× override), fixed reporting boundaries |
+| sr-screener | `protocol` | Fidelity | Heavy | Criteria copied from the source, never invented; unconfirmed items stay `[proposed]` |
+| sr-screener | `quick` | Fidelity | Heavy | Fixed decision table, same rules as the dual-review run |
+| sr-screener | `pilot` | Fidelity | Heavy | Fixed calibration report: seeds, agreement, conflicts, rates |
+| sr-screener | `ta-screen` | Fidelity | Heavy | Confirmed protocol embedded verbatim; ordered exclusion codes; one label per record |
+| sr-screener | `ft-screen` | Fidelity | Heavy | One reason per excluded report, with page and section |
+| sr-screener | `adjudicate` | Fidelity | Heavy | Fixed third-reviewer tie-break; advisory output |
+| sr-screener | `audit` | Fidelity | Heavy | Fresh blinded re-screen of selected exclusions; advisory output |
+| sr-screener | `report` | Fidelity | Heavy | Deterministic script output from merged decisions |
 
 ---
 

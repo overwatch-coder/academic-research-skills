@@ -36,6 +36,22 @@ def run_script(
     )
 
 
+def load_module_from_path(name: str, path: Path):
+    """Import a script file as a module (for unit-testing its functions).
+
+    Centralises the spec_from_file_location -> module_from_spec ->
+    exec_module boilerplate. Six pre-existing test files carry local copies
+    under various names (_load, _load_lint, _load_module) — they can migrate
+    at next edit; new test files should call this.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run_skill_linter(script_path: Path, root: Path) -> subprocess.CompletedProcess[str]:
     """Invoke a SKILL.md linter (--path arg + PYTHONPATH=scripts/)."""
     return run_script(
@@ -43,6 +59,20 @@ def run_skill_linter(script_path: Path, root: Path) -> subprocess.CompletedProce
         "--path",
         str(root),
         extra_env={"PYTHONPATH": str(script_path.parent)},
+    )
+
+
+def write_skill(root: Path, name: str, frontmatter_body: str) -> None:
+    """Write a synthetic <root>/<name>/SKILL.md with the given frontmatter.
+
+    Single-sourced here (previously copied verbatim in
+    test_check_task_type.py and test_check_data_access_level.py, per this
+    module's migrate-at-next-edit convention)."""
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\n{frontmatter_body}---\n\n# {name}\n",
+        encoding="utf-8",
     )
 
 
